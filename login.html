@@ -175,14 +175,10 @@
 
     let googleInitialized = false;
 
-    // Initialize Google Sign-In when library loads
+    // Initialize Google Code Flow when library loads
     function initGoogleSignIn() {
       if (typeof google === 'undefined' || googleInitialized) return;
       try {
-        google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: handleGoogleCallback
-        });
         googleInitialized = true;
         console.log('✅ Google Sign-In initialized');
       } catch (e) {
@@ -190,12 +186,11 @@
       }
     }
 
-    // Try to init immediately or on load
     if (typeof google !== 'undefined') {
       initGoogleSignIn();
     }
     window.addEventListener('load', () => {
-      setTimeout(initGoogleSignIn, 500); // Give GSI time to load
+      setTimeout(initGoogleSignIn, 500);
     });
 
     // Handle Google Sign-In button click
@@ -222,35 +217,55 @@
       initGoogleSignIn(); // Ensure initialized
       showMessage('login-msg', 'Opening Google sign-in...', 'success');
 
-      // Use the token client for OAuth popup (more reliable)
+      // Use the token flow to avoid redirect URI issues in the current Google client setup
       try {
         const tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: GOOGLE_CLIENT_ID,
           scope: 'email profile',
           callback: async (tokenResponse) => {
-            console.log('Token response:', tokenResponse);
             if (tokenResponse.error) {
               console.error('Token error:', tokenResponse);
               showMessage('login-msg', 'Google authorization failed: ' + (tokenResponse.error_description || tokenResponse.error), 'error');
               return;
             }
-            if (tokenResponse.access_token) {
-              showMessage('login-msg', 'Verifying with Google...', 'success');
-              try {
-                // Get user info from Google
-                const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                  headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
-                });
-                if (!userInfoRes.ok) {
-                  throw new Error('Failed to get user info from Google');
-                }
-                const userInfo = await userInfoRes.json();
-                console.log('User info:', userInfo);
-                handleGoogleUser(userInfo);
-              } catch (fetchError) {
-                console.error('Fetch user info error:', fetchError);
-                showMessage('login-msg', 'Failed to get Google user info. Please try again.', 'error');
+
+            if (!tokenResponse.access_token) {
+              showMessage('login-msg', 'Google authorization failed: missing access token', 'error');
+              return;
+            }
+
+            showMessage('login-msg', 'Verifying with Google...', 'success');
+            try {
+              const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
+              });
+              if (!userInfoRes.ok) {
+                throw new Error('Failed to get user info from Google');
               }
+              const userInfo = await userInfoRes.json();
+              console.log('User info:', userInfo);
+
+              const result = await fetch(`${API_BASE}/auth/google-userinfo`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  email: userInfo.email,
+                  name: userInfo.name,
+                  picture: userInfo.picture,
+                  googleId: userInfo.sub
+                })
+              });
+
+              const data = await result.json();
+
+              if (result.ok) {
+                loginSuccess(data.user, data.token);
+              } else {
+                showMessage('login-msg', data.message || 'Google login failed', 'error');
+              }
+            } catch (fetchError) {
+              console.error('Fetch user info error:', fetchError);
+              showMessage('login-msg', 'Failed to get Google user info. Please try again.', 'error');
             }
           },
           error_callback: (error) => {
@@ -270,76 +285,6 @@
         showMessage('login-msg', 'Failed to start Google sign-in: ' + e.message, 'error');
       }
     });
-
-    // Handle Google credential callback (One Tap flow)
-    async function handleGoogleCallback(response) {
-      console.log('Google callback received');
-      try {
-        const result = await fetch(`${API_BASE}/auth/google`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ credential: response.credential })
-        });
-
-        const data = await result.json();
-
-        if (result.ok) {
-          loginSuccess(data.user, data.token);
-        } else {
-          showMessage('login-msg', data.message || 'Google login failed', 'error');
-        }
-      } catch (error) {
-        console.error('Google login error:', error);
-        // Fallback: decode JWT locally and login without backend
-        try {
-          const payload = JSON.parse(atob(response.credential.split('.')[1]));
-          const user = {
-            id: payload.sub,
-            name: payload.name,
-            email: payload.email,
-            avatar: payload.picture
-          };
-          loginSuccess(user, null);
-        } catch (e) {
-          showMessage('login-msg', 'Connection error. Please try again.', 'error');
-        }
-      }
-    }
-
-    // Handle user info from Google (OAuth token flow)
-    async function handleGoogleUser(userInfo) {
-      console.log('Handling Google user:', userInfo.email);
-      try {
-        const result = await fetch(`${API_BASE}/auth/google-userinfo`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: userInfo.email,
-            name: userInfo.name,
-            picture: userInfo.picture,
-            googleId: userInfo.sub
-          })
-        });
-
-        const data = await result.json();
-
-        if (result.ok) {
-          loginSuccess(data.user, data.token);
-        } else {
-          showMessage('login-msg', data.message || 'Google login failed', 'error');
-        }
-      } catch (error) {
-        console.error('Google login error (no backend):', error);
-        // Fallback: login without backend
-        const user = {
-          id: userInfo.sub,
-          name: userInfo.name,
-          email: userInfo.email,
-          avatar: userInfo.picture
-        };
-        loginSuccess(user, null);
-      }
-    }
 
     // Centralized login success handler
     function loginSuccess(user, token) {

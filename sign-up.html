@@ -177,21 +177,50 @@
                 showMessage('signup-msg', 'Google authorization failed: ' + (tokenResponse.error_description || tokenResponse.error), 'error');
                 return;
               }
-              if (tokenResponse.access_token) {
-                showMessage('signup-msg', 'Verifying with Google...', 'success');
-                try {
-                  const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                    headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
-                  });
-                  if (!userInfoRes.ok) {
-                    throw new Error('Failed to get user info from Google');
-                  }
-                  const userInfo = await userInfoRes.json();
-                  handleGoogleUser(userInfo);
-                } catch (fetchError) {
-                  console.error('Fetch user info error:', fetchError);
-                  showMessage('signup-msg', 'Failed to get Google user info. Please try again.', 'error');
+
+              if (!tokenResponse.access_token) {
+                showMessage('signup-msg', 'Google authorization failed: missing access token', 'error');
+                return;
+              }
+
+              showMessage('signup-msg', 'Verifying with Google...', 'success');
+              try {
+                const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                  headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
+                });
+                if (!userInfoRes.ok) {
+                  throw new Error('Failed to get user info from Google');
                 }
+                const userInfo = await userInfoRes.json();
+
+                const result = await fetch(`${API_BASE}/auth/google-userinfo`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    email: userInfo.email,
+                    name: userInfo.name,
+                    picture: userInfo.picture,
+                    googleId: userInfo.sub
+                  })
+                });
+
+                const data = await result.json();
+
+                if (result.ok) {
+                  localStorage.setItem('currentUser', JSON.stringify(data.user));
+                  if (data.token) localStorage.setItem('authToken', data.token);
+                  localStorage.setItem('isLoggedIn', 'true');
+
+                  showMessage('signup-msg', `Welcome, ${data.user.name}! Redirecting...`, 'success');
+                  setTimeout(() => {
+                    window.location.href = 'Home%20page/home.html';
+                  }, 800);
+                } else {
+                  showMessage('signup-msg', data.message || 'Google sign-up failed', 'error');
+                }
+              } catch (fetchError) {
+                console.error('Fetch user info error:', fetchError);
+                showMessage('signup-msg', 'Failed to get Google user info. Please try again.', 'error');
               }
             },
             error_callback: (error) => {
@@ -211,54 +240,6 @@
           showMessage('signup-msg', 'Failed to start Google sign-up: ' + e.message, 'error');
         }
       });
-    }
-
-    async function handleGoogleUser(userInfo) {
-      try {
-        showMessage('signup-msg', 'Creating your account...', 'success');
-        
-        const result = await fetch(`${API_BASE}/auth/google-userinfo`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: userInfo.email,
-            name: userInfo.name,
-            picture: userInfo.picture,
-            googleId: userInfo.sub
-          })
-        });
-
-        const data = await result.json();
-
-        if (result.ok) {
-          localStorage.setItem('currentUser', JSON.stringify(data.user));
-          if (data.token) localStorage.setItem('authToken', data.token);
-          localStorage.setItem('isLoggedIn', 'true');
-          
-          showMessage('signup-msg', `Welcome, ${data.user.name}! Redirecting...`, 'success');
-          setTimeout(() => {
-            window.location.href = 'Home%20page/home.html';
-          }, 800);
-        } else {
-          showMessage('signup-msg', data.message || 'Google sign-up failed', 'error');
-        }
-      } catch (error) {
-        console.error('Google signup error:', error);
-        // Fallback: create user locally if backend is unavailable
-        const user = {
-          id: userInfo.sub,
-          name: userInfo.name,
-          email: userInfo.email,
-          avatar: userInfo.picture
-        };
-        localStorage.setItem('currentUser', JSON.stringify(user));
-        localStorage.setItem('isLoggedIn', 'true');
-        
-        showMessage('signup-msg', `Welcome, ${user.name}! (Offline mode)`, 'success');
-        setTimeout(() => {
-          window.location.href = 'Home%20page/home.html';
-        }, 800);
-      }
     }
 
     function showMessage(id, text, type) {
